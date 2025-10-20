@@ -1,30 +1,77 @@
-name: Agente WhatsApp GPT
+import os
+import json
+import requests
+from openai import OpenAI
 
-on:
-  workflow_dispatch:  # 👈 adiciona esta linha
-  push:
-    paths:
-      - 'entrada.json'
+# === Configurações ===
+NUMERO_DONO = "5549984094010"  # <-- teu número aqui, no formato 55 + DDD + número
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ZAPI_INSTANCE = os.getenv("ZAPI_INSTANCE")
+ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 
-jobs:
-  responder:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Instalar dependências
-        run: pip install openai requests
-      - name: Rodar agente
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ZAPI_INSTANCE: ${{ secrets.ZAPI_INSTANCE }}
-          ZAPI_TOKEN: ${{ secrets.ZAPI_TOKEN }}
-        run: python processar.py
-      - name: Commitar resultado
-        run: |
-          git config --global user.name "Agente IA"
-          git config --global user.email "bot@github.com"
-          git add saida.json
-          git commit -m "Resposta automática"
-          git push
+client = OpenAI(api_key=OPENAI_API_KEY)
 
+# === Lê mensagem recebida ===
+with open("entrada.json", "r", encoding="utf-8") as f:
+    entrada = json.load(f)
+
+numero = str(entrada.get("numero", "")).strip()
+mensagem = entrada.get("mensagem", "").strip()
+
+# === Verifica se veio de grupo ===
+# Grupos do WhatsApp vêm com hífen ("-") no ID
+if "-" in numero and numero != NUMERO_DONO:
+    print("Mensagem de grupo ignorada.")
+    exit(0)
+
+# === Verifica se é o dono ===
+sou_dono = numero == NUMERO_DONO
+
+# === Se não é o dono e não contém 'zumo', ignora ===
+if not sou_dono and "zumo" not in mensagem.lower():
+    print("Mensagem sem comando secreto, ignorando.")
+    exit(0)
+
+# === Remove o comando 'Zumo' e obtém a instrução ===
+instrucoes = mensagem.lower().split("zumo", 1)[1].strip() if "zumo" in mensagem.lower() else mensagem
+
+if not instrucoes:
+    resposta_texto = "Olá! Diga 'Zumo' seguido da sua instrução 😉"
+else:
+    prompt = f"O usuário enviou: '{instrucoes}'. Responda em português de forma natural e útil."
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Você é um assistente inteligente, útil e educado."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        resposta_texto = completion.choices[0].message.content.strip()
+    except Exception as e:
+        resposta_texto = f"[ERRO GPT]: {e}"
+
+# === Envia resposta via Z-API ===
+url_envio = f"https://api.z-api.io/instances/{ZAPI_INSTANCE}/token/{ZAPI_TOKEN}/send-text"
+payload = {"phone": numero, "message": resposta_texto}
+
+try:
+    r = requests.post(url_envio, json=payload)
+    if r.status_code == 200:
+        print("Mensagem enviada com sucesso!")
+    else:
+        print(f"Falha ao enviar: {r.text}")
+except Exception as e:
+    print(f"Erro ao enviar via Z-API: {e}")
+
+# === Salva histórico em saida.json ===
+with open("saida.json", "w", encoding="utf-8") as f:
+    json.dump({
+        "numero": numero,
+        "mensagem": mensagem,
+        "resposta": resposta_texto,
+        "sou_dono": sou_dono
+    }, f, ensure_ascii=False, indent=2)
+
+print("Processo concluído.")
