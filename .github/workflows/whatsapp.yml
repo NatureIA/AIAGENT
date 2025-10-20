@@ -1,9 +1,11 @@
 name: Agente WhatsApp GPT
 
 on:
+  workflow_dispatch:  # 👈 adiciona esta linha
   push:
     paths:
       - 'entrada.json'
+
 
 jobs:
   responder:
@@ -25,3 +27,4 @@ jobs:
           git add saida.json
           git commit -m "Resposta automática"
           git push
+
